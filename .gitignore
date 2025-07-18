@@ -1,0 +1,11 @@
+# Clasp configuration (contains script ID)
+.clasp.json
+
+# Claude Code directory
+.claude/
+
+# macOS files
+.DS_Store
+
+# Logs
+*.log

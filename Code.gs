@@ -3,8 +3,22 @@ function onInstall() {
 }
 
 function createEmailTrigger() {
-  const trigger = ScriptApp.newGmailTrigger().create();
-  console.log('Gmail trigger created with ID:', trigger.getUniqueId());
+  // 刪除現有的 Gmail 觸發器
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(trigger => {
+    if (trigger.getEventType() === ScriptApp.EventType.ON_FORM_SUBMIT) {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+  
+  // 由於 Gmail 觸發器已被棄用，改用時間觸發器定期檢查
+  const trigger = ScriptApp.newTrigger('processGmailMessages')
+    .timeBased()
+    .everyMinutes(5)
+    .create();
+  
+  console.log('Time-based trigger created with ID:', trigger.getUniqueId());
+  console.log('Will check for +vibe emails every 5 minutes');
 }
 
 function processGmailMessages(e) {
@@ -33,20 +47,39 @@ function shouldProcessEmail(message) {
   
   const allAddresses = [toAddress, ccAddress, bccAddress].join(' ');
   
-  return allAddresses.includes('+vibe');
+  // 檢查是否包含任何標籤（+後面跟著字母）
+  const tagRegex = /\+([a-zA-Z0-9]+)/g;
+  const matches = allAddresses.match(tagRegex);
+  
+  return matches && matches.length > 0;
+}
+
+function getEmailTag(message) {
+  const toAddress = message.getTo();
+  const ccAddress = message.getCc();
+  const bccAddress = message.getBcc();
+  
+  const allAddresses = [toAddress, ccAddress, bccAddress].join(' ');
+  
+  // 抓取第一個標籤
+  const tagRegex = /\+([a-zA-Z0-9]+)/;
+  const match = allAddresses.match(tagRegex);
+  
+  return match ? match[1] : 'default';
 }
 
 function processVibeEmail(message) {
   try {
-    console.log('處理 +vibe 郵件:', message.getSubject());
+    const tag = getEmailTag(message);
+    console.log('處理標籤郵件:', tag, '主旨:', message.getSubject());
     
     const pdfBlob = createPdfFromEmail(message);
     
-    savePdfToDrive(pdfBlob, message);
+    savePdfToDrive(pdfBlob, message, tag);
     
     console.log('郵件處理完成');
   } catch (error) {
-    console.error('處理 vibe 郵件時發生錯誤:', error);
+    console.error('處理標籤郵件時發生錯誤:', error);
   }
 }
 
@@ -104,28 +137,31 @@ function createPdfFromEmail(message) {
   }
 }
 
-function savePdfToDrive(pdfBlob, message) {
+function savePdfToDrive(pdfBlob, message, tag) {
   try {
     const subject = message.getSubject() || '無主題';
     const date = Utilities.formatDate(message.getDate(), 'Asia/Taipei', 'yyyy-MM-dd_HH-mm-ss');
     
-    const fileName = `[Vibe]_${subject}_${date}.pdf`;
+    const fileName = `[${tag}]_${subject}_${date}.pdf`;
     
     const safeFileName = fileName.replace(/[\\/:*?"<>|]/g, '_');
     
-    let vibeFolder;
-    const folders = DriveApp.getFoldersByName('Vibe_Emails');
+    // 根據標籤建立不同的資料夾
+    const folderName = `Email_${tag}`;
+    let targetFolder;
+    const folders = DriveApp.getFoldersByName(folderName);
     if (folders.hasNext()) {
-      vibeFolder = folders.next();
+      targetFolder = folders.next();
     } else {
-      vibeFolder = DriveApp.createFolder('Vibe_Emails');
+      targetFolder = DriveApp.createFolder(folderName);
     }
     
-    const file = vibeFolder.createFile(pdfBlob.setName(safeFileName));
+    const file = targetFolder.createFile(pdfBlob.setName(safeFileName));
     
     console.log('PDF 已儲存:', file.getName());
     console.log('檔案 ID:', file.getId());
-    console.log('資料夾:', vibeFolder.getName());
+    console.log('資料夾:', targetFolder.getName());
+    console.log('標籤:', tag);
     
     return file;
   } catch (error) {
@@ -133,6 +169,7 @@ function savePdfToDrive(pdfBlob, message) {
     throw error;
   }
 }
+
 
 function testFunction() {
   console.log('測試函數 - 檢查最近的郵件');
@@ -147,7 +184,48 @@ function testFunction() {
     for (const message of messages) {
       const toAddress = message.getTo();
       console.log('收件者:', toAddress);
-      console.log('是否包含 +vibe:', toAddress.includes('+vibe'));
+      
+      if (shouldProcessEmail(message)) {
+        const tag = getEmailTag(message);
+        console.log('發現標籤:', tag);
+        console.log('會儲存到資料夾:', `Email_${tag}`);
+        console.log('郵件是否未讀:', message.isUnread());
+        
+        if (message.isUnread()) {
+          console.log('✅ 符合處理條件');
+        } else {
+          console.log('❌ 郵件已讀，會被跳過');
+        }
+      } else {
+        console.log('無標籤，跳過');
+      }
     }
   }
+}
+
+function forceProcessTestEmail() {
+  console.log('強制處理測試 - 處理已讀的 +vibe 郵件');
+  
+  const threads = GmailApp.getInboxThreads(0, 10);
+  
+  for (const thread of threads) {
+    const messages = thread.getMessages();
+    
+    for (const message of messages) {
+      if (shouldProcessEmail(message)) {
+        const tag = getEmailTag(message);
+        console.log('找到標籤郵件:', tag, message.getSubject());
+        
+        try {
+          processVibeEmail(message);
+          console.log('✅ 強制處理完成');
+          return; // 只處理第一封找到的
+        } catch (error) {
+          console.error('處理失敗:', error);
+        }
+      }
+    }
+  }
+  
+  console.log('沒有找到標籤郵件');
 }
